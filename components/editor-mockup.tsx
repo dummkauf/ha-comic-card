@@ -151,7 +151,7 @@ card_style: ${cardStyle}`}
         <pre className="p-4 text-xs font-mono text-foreground overflow-x-auto leading-relaxed">
           {`shell_command:
   fetch_comic_${slug}: >-
-    /config/www/community/comic-strip-card/comic-strip.sh
+    /config/www/community/comic-card/comic-strip.sh
     ${rssUrl || "https://comiccaster.xyz/rss/calvinandhobbes"}`}
         </pre>
       </div>

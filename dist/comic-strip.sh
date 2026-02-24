@@ -10,8 +10,8 @@
 #
 # Arguments:
 #   rss_url   - The RSS feed URL (e.g. https://comiccaster.xyz/rss/calvinandhobbes)
-#   save_dir  - (Optional) Directory to save files. Defaults to:
-#               /config/www/community/comic-strip-card/
+#   save_dir  - (Optional) Directory to save files. Defaults to the same
+#               directory the script lives in (auto-detected).
 #
 # Output files:
 #   <slug>.png        - The comic strip image
@@ -26,7 +26,11 @@ set -euo pipefail
 
 # --- Arguments ---------------------------------------------------------------
 RSS_URL="${1:-}"
-SAVE_DIR="${2:-/config/www/community/comic-strip-card/}"
+
+# Default save dir = the same directory this script lives in.
+# This works regardless of repo/folder name (comic-card, comic-strip-card, etc.)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SAVE_DIR="${2:-$SCRIPT_DIR/}"
 
 if [ -z "$RSS_URL" ]; then
   echo "Error: No RSS URL provided."

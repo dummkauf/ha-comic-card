@@ -30,10 +30,12 @@ This is a generalized version of [calvin-card-ha](https://github.com/Brianfit/ca
 ### Manual
 
 1. Download `comic-strip-card.js` and `comic-strip.sh` from the `dist/` folder
-2. Copy them to `/config/www/community/comic-strip-card/`
+2. Copy them to `/config/www/community/comic-card/` (or any folder name you prefer)
 3. Add the resource in **Settings > Dashboards > Resources**:
-   - URL: `/local/community/comic-strip-card/comic-strip-card.js`
+   - URL: `/local/community/comic-card/comic-strip-card.js`
    - Type: JavaScript Module
+
+> **Note on folder names:** HACS names the download folder after your GitHub repository name. If your repo is called `comic-card`, the folder will be `/config/www/community/comic-card/`. All paths in this README use that name. Both the JS card and shell script auto-detect their folder location, so they work regardless of the actual folder name.
 
 ---
 
@@ -44,7 +46,7 @@ The card displays a locally cached comic image. A shell script fetches the image
 ### Step 1: Make the Shell Script Executable
 
 ```bash
-chmod +x /config/www/community/comic-strip-card/comic-strip.sh
+chmod +x /config/www/community/comic-card/comic-strip.sh
 ```
 
 ### Step 2: Add Shell Commands
@@ -54,13 +56,13 @@ Add the following to your `configuration.yaml`. Create one entry per comic you w
 ```yaml
 shell_command:
   fetch_comic_calvinandhobbes: >-
-    /config/www/community/comic-strip-card/comic-strip.sh
+    /config/www/community/comic-card/comic-strip.sh
     https://comiccaster.xyz/rss/calvinandhobbes
   fetch_comic_garfield: >-
-    /config/www/community/comic-strip-card/comic-strip.sh
+    /config/www/community/comic-card/comic-strip.sh
     https://comiccaster.xyz/rss/garfield
   fetch_comic_peanuts: >-
-    /config/www/community/comic-strip-card/comic-strip.sh
+    /config/www/community/comic-card/comic-strip.sh
     https://comiccaster.xyz/rss/peanuts
 ```
 
@@ -162,7 +164,7 @@ https://comiccaster.xyz/rss/<comic-name>
 2. **Automation** runs the shell script daily (or on your preferred schedule)
 3. **Lovelace card** (`comic-strip-card.js`) reads the cached image and metadata from the local filesystem and renders it
 
-Files are stored in `/config/www/community/comic-strip-card/`:
+Files are stored in the same folder as the card (e.g., `/config/www/community/comic-card/`):
 - `<slug>.png` -- The comic strip image
 - `<slug>_data.json` -- Metadata (title, timestamp)
 
@@ -174,7 +176,7 @@ The slug is derived from the RSS URL (e.g., `calvinandhobbes` from `https://comi
 
 **Card shows "No comic strip loaded yet"**
 - The shell script hasn't run yet. Go to Developer Tools > Services and call the shell command manually.
-- Check that the file exists: look for `/config/www/community/comic-strip-card/<slug>.png`
+- Check that the file exists: look for `/config/www/community/comic-card/<slug>.png`
 
 **Shell command fails**
 - Check the Home Assistant logs for error output

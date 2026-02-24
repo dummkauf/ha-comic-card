@@ -161,7 +161,7 @@ export default function Page() {
               {
                 step: "2",
                 title: "Add Shell Commands",
-                desc: "Add one shell_command per comic in configuration.yaml.",
+                desc: "Add one shell_command per comic in configuration.yaml. Paths auto-detect from your repo folder name.",
               },
               {
                 step: "3",

@@ -10,6 +10,26 @@
 const CARD_VERSION = "1.0.0";
 
 // ---------------------------------------------------------------------------
+// Auto-detect the base path from this script's own URL.
+// When HA loads this file, document.currentScript.src will be something like:
+//   http://ha:8123/local/community/comic-card/comic-strip-card.js
+// We strip the filename to get: /local/community/comic-card
+// This means the card works regardless of what the HACS folder is named.
+// ---------------------------------------------------------------------------
+const SCRIPT_URL = document.currentScript && document.currentScript.src;
+const AUTO_BASE_PATH = (() => {
+  if (!SCRIPT_URL) return "/local/community/comic-card";
+  try {
+    const url = new URL(SCRIPT_URL);
+    // pathname = /local/community/comic-card/comic-strip-card.js
+    const dir = url.pathname.substring(0, url.pathname.lastIndexOf("/"));
+    return dir || "/local/community/comic-card";
+  } catch {
+    return "/local/community/comic-card";
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Helper: derive a filesystem-safe slug from an RSS URL
 //   https://comiccaster.xyz/rss/calvinandhobbes  ->  calvinandhobbes
 //   https://example.com/feed/my-comic.xml        ->  my-comic
@@ -65,7 +85,7 @@ class ComicStripCard extends HTMLElement {
       card_style: config.card_style || "default",
     };
     this._slug = slugFromUrl(this._config.rss_url);
-    this._basePath = `/local/community/comic-strip-card`;
+    this._basePath = AUTO_BASE_PATH;
     this._render();
     this._fetchMeta();
   }
