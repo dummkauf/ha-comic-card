@@ -7,7 +7,7 @@
  * License: MIT
  */
 
-const CARD_VERSION = "2.0.0";
+const CARD_VERSION = "2.1.0";
 
 // ---------------------------------------------------------------------------
 // CORS proxy helper
@@ -184,13 +184,11 @@ class ComicStripCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.rss_url) {
-      throw new Error("Please set an rss_url in the card configuration.");
-    }
-
+    // Don't throw on missing rss_url -- show a friendly placeholder instead.
+    // Throwing here breaks the visual editor and the card picker.
     const oldUrl = this._config.rss_url;
     this._config = {
-      rss_url: config.rss_url,
+      rss_url: config.rss_url || "",
       title: config.title || "",
       show_title: config.show_title !== false,
       show_date: config.show_date !== false,
@@ -198,6 +196,15 @@ class ComicStripCard extends HTMLElement {
       cors_proxy: config.cors_proxy || "",
       refresh_interval: config.refresh_interval || 3600,
     };
+
+    // If no RSS URL is configured, show the setup placeholder
+    if (!this._config.rss_url) {
+      this._loading = false;
+      this._error = null;
+      this._feedData = null;
+      this._render();
+      return;
+    }
 
     // Only re-fetch if the RSS URL changed or we haven't fetched yet
     if (oldUrl !== this._config.rss_url || !this._feedData) {
@@ -414,6 +421,13 @@ class ComicStripCard extends HTMLElement {
   }
 
   _renderBody() {
+    if (!this._config.rss_url) {
+      return this._renderPlaceholder(
+        "No RSS feed configured.",
+        "Open the card editor and paste an RSS feed URL from comiccaster.xyz or another comic RSS source."
+      );
+    }
+
     if (this._loading) {
       return `
         <div class="loading">
@@ -715,11 +729,13 @@ class ComicStripCardEditor extends HTMLElement {
 
   _updateConfig(key, value) {
     this._config = { ...this._config, [key]: value };
-    const event = new CustomEvent("config-changed", {
-      detail: { config: this._config },
+    // Use the exact event dispatch pattern from the HA developer docs:
+    // new Event() with detail assigned separately, bubbles + composed.
+    const event = new Event("config-changed", {
       bubbles: true,
       composed: true,
     });
+    event.detail = { config: { ...this._config } };
     this.dispatchEvent(event);
   }
 
@@ -734,9 +750,13 @@ class ComicStripCardEditor extends HTMLElement {
 
 // ---------------------------------------------------------------------------
 // Register elements
+// IMPORTANT: The editor MUST be registered before the card.
+// When HA calls ComicStripCard.getConfigElement(), it does
+// document.createElement("comic-strip-card-editor") which requires
+// the editor custom element to already be defined.
 // ---------------------------------------------------------------------------
-customElements.define("comic-strip-card", ComicStripCard);
 customElements.define("comic-strip-card-editor", ComicStripCardEditor);
+customElements.define("comic-strip-card", ComicStripCard);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
