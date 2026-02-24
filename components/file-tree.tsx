@@ -5,9 +5,8 @@ export default function FileTree() {
     {
       name: "comic-strip-card.js",
       indent: 1,
-      desc: "Card + visual editor",
+      desc: "Card + visual editor (single file, no dependencies)",
     },
-    { name: "comic-strip.sh", indent: 1, desc: "RSS fetch script" },
     { name: "LICENSE", indent: 0, desc: "MIT" },
     { name: "README.md", indent: 0, desc: "Documentation" },
   ];

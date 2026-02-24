@@ -33,8 +33,8 @@ export default function Page() {
             Comic Strip Card
           </h1>
           <p className="text-base text-muted-foreground leading-relaxed max-w-xl text-pretty">
-            A generic HACS Lovelace card that displays the current daily comic
-            strip from any RSS feed. Works with{" "}
+            A single-file HACS Lovelace card that displays daily comic
+            strips from any RSS feed. No shell scripts or automations needed. Works with{" "}
             <a
               href="https://comiccaster.xyz/"
               target="_blank"
@@ -118,7 +118,7 @@ export default function Page() {
             </h2>
             <p className="text-sm text-muted-foreground mt-1">
               Mockup of how the card appears on your Home Assistant dashboard.
-              The actual comic image loads from your local filesystem.
+              The card fetches the comic image directly from the RSS feed.
             </p>
           </div>
           <CardMockup />
@@ -156,22 +156,17 @@ export default function Page() {
               {
                 step: "1",
                 title: "Install via HACS",
-                desc: "Add as a custom repository (Dashboard category), then install.",
+                desc: "Add as a custom repository (Dashboard category), then install and restart HA.",
               },
               {
                 step: "2",
-                title: "Add Shell Commands",
-                desc: "Add one shell_command per comic in configuration.yaml. Paths auto-detect from your repo folder name.",
+                title: "Add Card to Dashboard",
+                desc: "Edit your dashboard, click Add Card, search for Comic Strip Card, and paste an RSS feed URL.",
               },
               {
                 step: "3",
-                title: "Create Automation",
-                desc: "Set up a daily automation to fetch comics on a schedule.",
-              },
-              {
-                step: "4",
-                title: "Add Card to Dashboard",
-                desc: "Use the visual editor or YAML to add cards to your Lovelace dashboard.",
+                title: "Done!",
+                desc: "No shell scripts, automations, or configuration.yaml changes needed. The card fetches the comic directly.",
               },
             ].map((s) => (
               <div
@@ -226,7 +221,8 @@ export default function Page() {
                     "Multiple installs",
                     "One install, many cards",
                   ],
-                  ["Shell script", "Hardcoded URL", "Parameterized"],
+                  ["Shell script needed", "Yes", "No"],
+                  ["Automation needed", "Yes", "No"],
                 ].map(([feature, old, current]) => (
                   <tr key={feature} className="bg-card">
                     <td className="px-4 py-3 text-foreground font-medium">

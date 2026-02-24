@@ -1,51 +1,158 @@
 /**
  * Comic Strip Card for Home Assistant
  * A generic Lovelace card that displays daily comic strips from any RSS feed.
+ * Fetches the RSS feed directly in the browser -- no shell script needed.
  * Designed to work with https://comiccaster.xyz/ feeds.
  *
- * Repository: https://github.com/YOUR_USERNAME/comic-strip-card
  * License: MIT
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "2.0.0";
 
 // ---------------------------------------------------------------------------
-// Auto-detect the base path from this script's own URL.
-// When HA loads this file, document.currentScript.src will be something like:
-//   http://ha:8123/local/community/comic-card/comic-strip-card.js
-// We strip the filename to get: /local/community/comic-card
-// This means the card works regardless of what the HACS folder is named.
+// CORS proxy helper
+// Some RSS feeds (including comiccaster.xyz) may not include CORS headers.
+// We try a direct fetch first, then fall back to a public CORS proxy.
+// Users can also set a custom proxy in card config.
 // ---------------------------------------------------------------------------
-const SCRIPT_URL = document.currentScript && document.currentScript.src;
-const AUTO_BASE_PATH = (() => {
-  if (!SCRIPT_URL) return "/local/community/comic-card";
-  try {
-    const url = new URL(SCRIPT_URL);
-    // pathname = /local/community/comic-card/comic-strip-card.js
-    const dir = url.pathname.substring(0, url.pathname.lastIndexOf("/"));
-    return dir || "/local/community/comic-card";
-  } catch {
-    return "/local/community/comic-card";
-  }
-})();
+const DEFAULT_CORS_PROXIES = [
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+];
 
-// ---------------------------------------------------------------------------
-// Helper: derive a filesystem-safe slug from an RSS URL
-//   https://comiccaster.xyz/rss/calvinandhobbes  ->  calvinandhobbes
-//   https://example.com/feed/my-comic.xml        ->  my-comic
-// ---------------------------------------------------------------------------
-function slugFromUrl(url) {
-  try {
-    const pathname = new URL(url).pathname;
-    const lastSegment = pathname.split("/").filter(Boolean).pop() || "comic";
-    return lastSegment.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
-  } catch {
-    return "comic";
+async function fetchWithCorsFallback(url, customProxy) {
+  // If the user provided a custom proxy URL template, try that first
+  if (customProxy) {
+    const proxied = customProxy.replace("{url}", encodeURIComponent(url));
+    const resp = await fetch(proxied, { cache: "no-store" });
+    if (resp.ok) return resp;
   }
+
+  // Try direct fetch first (works if the feed server allows CORS)
+  try {
+    const resp = await fetch(url, { cache: "no-store" });
+    if (resp.ok) return resp;
+  } catch {
+    // CORS or network error -- fall through to proxies
+  }
+
+  // Try each public proxy in order
+  for (const proxyFn of DEFAULT_CORS_PROXIES) {
+    try {
+      const resp = await fetch(proxyFn(url), { cache: "no-store" });
+      if (resp.ok) return resp;
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error(`Failed to fetch RSS feed: ${url}`);
 }
 
 // ---------------------------------------------------------------------------
-// ComicStripCard — Main card element
+// RSS parser: extract the first item's image URL and metadata from XML text
+// Handles <img> in description, <enclosure>, and <media:content>
+// ---------------------------------------------------------------------------
+function parseRssFeed(xmlText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, "text/xml");
+
+  // Channel-level title (fallback for card title)
+  const channelTitle =
+    doc.querySelector("channel > title")?.textContent?.trim() || "";
+
+  // Get all items, take the first one (today's comic)
+  const items = doc.querySelectorAll("item");
+  if (items.length === 0) return { channelTitle, imageUrl: null, pubDate: null };
+
+  const item = items[0];
+
+  const pubDate = item.querySelector("pubDate")?.textContent?.trim() || null;
+  const itemTitle = item.querySelector("title")?.textContent?.trim() || "";
+
+  let imageUrl = null;
+
+  // Strategy 1: Look for <enclosure> with an image type
+  const enclosure = item.querySelector("enclosure");
+  if (enclosure) {
+    const encType = enclosure.getAttribute("type") || "";
+    const encUrl = enclosure.getAttribute("url") || "";
+    if (encUrl && (encType.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)/i.test(encUrl))) {
+      imageUrl = encUrl;
+    }
+  }
+
+  // Strategy 2: Look for <media:content> (namespace-aware and fallback)
+  if (!imageUrl) {
+    // Try namespace-aware first
+    const mediaContent = item.getElementsByTagNameNS(
+      "http://search.yahoo.com/mrss/",
+      "content"
+    );
+    if (mediaContent.length > 0) {
+      const mcUrl = mediaContent[0].getAttribute("url") || "";
+      const mcType = mediaContent[0].getAttribute("type") || mediaContent[0].getAttribute("medium") || "";
+      if (mcUrl && (mcType.includes("image") || /\.(png|jpe?g|gif|webp|svg)/i.test(mcUrl))) {
+        imageUrl = mcUrl;
+      }
+    }
+    // Fallback: try without namespace (some feeds use <media:content> without declaring the NS)
+    if (!imageUrl) {
+      const mcFallback = item.querySelectorAll("[url]");
+      for (const el of mcFallback) {
+        if (el.tagName.toLowerCase().includes("content") || el.tagName.toLowerCase().includes("thumbnail")) {
+          const u = el.getAttribute("url") || "";
+          if (u && /\.(png|jpe?g|gif|webp|svg)/i.test(u)) {
+            imageUrl = u;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Strategy 3: Parse <description> HTML for <img> tags
+  if (!imageUrl) {
+    let descHtml =
+      item.querySelector("description")?.textContent ||
+      item.querySelector("description")?.innerHTML ||
+      "";
+
+    // Handle CDATA: the text content should already be unwrapped, but just in case
+    descHtml = descHtml.replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
+
+    // Find img src
+    const imgMatch = descHtml.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (imgMatch && imgMatch[1]) {
+      imageUrl = imgMatch[1];
+    }
+  }
+
+  // Strategy 4: Look for image URL anywhere in the item content
+  if (!imageUrl) {
+    const contentEncoded = item.getElementsByTagNameNS(
+      "http://purl.org/rss/1.0/modules/content/",
+      "encoded"
+    );
+    if (contentEncoded.length > 0) {
+      const html = contentEncoded[0].textContent || "";
+      const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+      if (imgMatch && imgMatch[1]) {
+        imageUrl = imgMatch[1];
+      }
+    }
+  }
+
+  return {
+    channelTitle,
+    itemTitle,
+    imageUrl,
+    pubDate,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// ComicStripCard -- Main card element
 // ---------------------------------------------------------------------------
 class ComicStripCard extends HTMLElement {
   constructor() {
@@ -53,9 +160,10 @@ class ComicStripCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._config = {};
     this._hass = null;
-    this._meta = null;
+    this._feedData = null;
     this._error = null;
     this._loading = true;
+    this._lastFetchDate = null; // track the date of the last successful fetch
   }
 
   // --- HA lifecycle ---
@@ -70,6 +178,8 @@ class ComicStripCard extends HTMLElement {
       show_title: true,
       show_date: true,
       card_style: "default",
+      cors_proxy: "",
+      refresh_interval: 3600,
     };
   }
 
@@ -77,17 +187,31 @@ class ComicStripCard extends HTMLElement {
     if (!config.rss_url) {
       throw new Error("Please set an rss_url in the card configuration.");
     }
+
+    const oldUrl = this._config.rss_url;
     this._config = {
       rss_url: config.rss_url,
       title: config.title || "",
       show_title: config.show_title !== false,
       show_date: config.show_date !== false,
       card_style: config.card_style || "default",
+      cors_proxy: config.cors_proxy || "",
+      refresh_interval: config.refresh_interval || 3600,
     };
-    this._slug = slugFromUrl(this._config.rss_url);
-    this._basePath = AUTO_BASE_PATH;
-    this._render();
-    this._fetchMeta();
+
+    // Only re-fetch if the RSS URL changed or we haven't fetched yet
+    if (oldUrl !== this._config.rss_url || !this._feedData) {
+      this._loading = true;
+      this._error = null;
+      this._feedData = null;
+      this._render();
+      this._fetchFeed();
+    } else {
+      this._render();
+    }
+
+    // Set up auto-refresh
+    this._setupRefreshTimer();
   }
 
   set hass(hass) {
@@ -98,18 +222,48 @@ class ComicStripCard extends HTMLElement {
     return 4;
   }
 
+  connectedCallback() {
+    this._setupRefreshTimer();
+  }
+
+  disconnectedCallback() {
+    if (this._refreshTimer) {
+      clearInterval(this._refreshTimer);
+      this._refreshTimer = null;
+    }
+  }
+
+  _setupRefreshTimer() {
+    if (this._refreshTimer) {
+      clearInterval(this._refreshTimer);
+    }
+    const intervalSec = Math.max(300, this._config.refresh_interval || 3600);
+    this._refreshTimer = setInterval(() => {
+      this._fetchFeed();
+    }, intervalSec * 1000);
+  }
+
   // --- Data fetching ---
-  async _fetchMeta() {
-    const jsonUrl = `${this._basePath}/${this._slug}_data.json?_ts=${Date.now()}`;
+  async _fetchFeed() {
     try {
-      const resp = await fetch(jsonUrl, { cache: "no-store" });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      this._meta = await resp.json();
-      this._error = null;
+      const resp = await fetchWithCorsFallback(
+        this._config.rss_url,
+        this._config.cors_proxy || null
+      );
+      const xmlText = await resp.text();
+      const data = parseRssFeed(xmlText);
+
+      if (!data.imageUrl) {
+        this._error = "no-image";
+        this._feedData = data;
+      } else {
+        this._error = null;
+        this._feedData = data;
+        this._lastFetchDate = new Date();
+      }
       this._loading = false;
-    } catch {
-      this._meta = null;
-      this._error = "no-data";
+    } catch (err) {
+      this._error = err.message || "fetch-failed";
       this._loading = false;
     }
     this._render();
@@ -118,24 +272,24 @@ class ComicStripCard extends HTMLElement {
   // --- Rendering ---
   _render() {
     const isMinimal = this._config.card_style === "minimal";
-    const slug = this._slug || "comic";
-    const cacheBuster = `?_d=${new Date().toISOString().slice(0, 10)}`;
-    const imgSrc = `${this._basePath}/${slug}.png${cacheBuster}`;
 
     const title =
       this._config.title ||
-      (this._meta && this._meta.title) ||
-      slug.replace(/[-_]/g, " ");
+      (this._feedData && this._feedData.channelTitle) ||
+      (this._feedData && this._feedData.itemTitle) ||
+      "Comic Strip";
 
-    const dateStr =
-      this._meta && this._meta.timestamp
-        ? new Date(this._meta.timestamp).toLocaleDateString(undefined, {
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-          })
-        : "";
+    let dateStr = "";
+    if (this._feedData && this._feedData.pubDate) {
+      try {
+        dateStr = new Date(this._feedData.pubDate).toLocaleDateString(
+          undefined,
+          { weekday: "long", year: "numeric", month: "long", day: "numeric" }
+        );
+      } catch {
+        dateStr = this._feedData.pubDate;
+      }
+    }
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -238,38 +392,54 @@ class ComicStripCard extends HTMLElement {
             : ""
         }
         <div class="card-content">
-          ${this._renderBody(imgSrc)}
+          ${this._renderBody()}
         </div>
       </ha-card>
     `;
 
-    // Attach image load/error handlers
+    // Attach image error handler -- if the remote image fails, show placeholder
     const img = this.shadowRoot.querySelector(".comic-image");
     if (img) {
       img.addEventListener("error", () => {
         img.classList.add("error");
         const content = this.shadowRoot.querySelector(".card-content");
         if (content && !content.querySelector(".placeholder")) {
-          content.innerHTML = this._renderPlaceholder();
+          content.innerHTML = this._renderPlaceholder(
+            "Could not load the comic image.",
+            "The image URL may be broken or blocked."
+          );
         }
       });
     }
   }
 
-  _renderBody(imgSrc) {
+  _renderBody() {
     if (this._loading) {
       return `
         <div class="loading">
           <div class="loading-spinner"></div>
         </div>`;
     }
-    if (this._error === "no-data") {
-      return this._renderPlaceholder();
+
+    if (this._error === "fetch-failed" || (this._error && !this._feedData)) {
+      return this._renderPlaceholder(
+        "Could not fetch the RSS feed.",
+        "Check the feed URL or try adding a CORS proxy in the card config."
+      );
     }
-    return `<img class="comic-image" src="${imgSrc}" alt="Daily comic strip" crossorigin="anonymous" />`;
+
+    if (this._error === "no-image") {
+      return this._renderPlaceholder(
+        "No comic image found in the RSS feed.",
+        "The feed may use an unsupported format."
+      );
+    }
+
+    const imgUrl = this._feedData.imageUrl;
+    return `<img class="comic-image" src="${this._escHtml(imgUrl)}" alt="Daily comic strip" crossorigin="anonymous" referrerpolicy="no-referrer" />`;
   }
 
-  _renderPlaceholder() {
+  _renderPlaceholder(msg, hint) {
     return `
       <div class="placeholder">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -277,13 +447,8 @@ class ComicStripCard extends HTMLElement {
           <circle cx="8.5" cy="8.5" r="1.5"/>
           <polyline points="21 15 16 10 5 21"/>
         </svg>
-        <div class="msg">
-          No comic strip loaded yet.<br/>
-          Make sure the shell script has run at least once.
-        </div>
-        <div class="hint">
-          RSS Feed: ${this._escHtml(this._config.rss_url || "not set")}
-        </div>
+        <div class="msg">${msg || "No comic strip loaded yet."}</div>
+        <div class="hint">${hint || `RSS: ${this._escHtml(this._config.rss_url || "not set")}`}</div>
       </div>`;
   }
 
@@ -295,7 +460,7 @@ class ComicStripCard extends HTMLElement {
 }
 
 // ---------------------------------------------------------------------------
-// ComicStripCardEditor — Visual config editor
+// ComicStripCardEditor -- Visual config editor
 // ---------------------------------------------------------------------------
 class ComicStripCardEditor extends HTMLElement {
   constructor() {
@@ -336,7 +501,7 @@ class ComicStripCardEditor extends HTMLElement {
           color: var(--secondary-text-color, #888);
           margin-top: 2px;
         }
-        input[type="text"] {
+        input[type="text"], input[type="number"] {
           padding: 8px 12px;
           border: 1px solid var(--divider-color, #ddd);
           border-radius: 8px;
@@ -346,7 +511,7 @@ class ComicStripCardEditor extends HTMLElement {
           outline: none;
           transition: border-color 0.15s;
         }
-        input[type="text"]:focus {
+        input[type="text"]:focus, input[type="number"]:focus {
           border-color: var(--primary-color, #03a9f4);
         }
         input[type="text"]::placeholder {
@@ -371,7 +536,6 @@ class ComicStripCardEditor extends HTMLElement {
           font-size: 0.92em;
           outline: none;
         }
-        /* Simple toggle switch */
         .switch {
           position: relative;
           width: 44px;
@@ -416,6 +580,18 @@ class ComicStripCardEditor extends HTMLElement {
         .browse-link:hover {
           text-decoration: underline;
         }
+        .divider {
+          border-top: 1px solid var(--divider-color, #eee);
+          margin: 4px 0;
+        }
+        .section-label {
+          font-size: 0.76em;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: var(--secondary-text-color, #888);
+          margin-top: 4px;
+        }
       </style>
       <div class="form">
         <div class="field">
@@ -439,7 +615,7 @@ class ComicStripCardEditor extends HTMLElement {
             value="${this._escAttr(this._config.title || "")}"
             placeholder="e.g. Calvin and Hobbes"
           />
-          <div class="hint">Overrides the title from the RSS feed. Leave blank to use the feed title.</div>
+          <div class="hint">Overrides the title from the RSS feed. Leave blank to auto-detect.</div>
         </div>
         <div class="field">
           <div class="toggle-row">
@@ -457,7 +633,7 @@ class ComicStripCardEditor extends HTMLElement {
           <div class="toggle-row">
             <div class="toggle-label">
               <label>Show Date</label>
-              <span class="hint">Display the date the comic was fetched.</span>
+              <span class="hint">Display the publication date from the RSS feed.</span>
             </div>
             <label class="switch">
               <input type="checkbox" id="show_date" ${this._config.show_date !== false ? "checked" : ""} />
@@ -471,6 +647,34 @@ class ComicStripCardEditor extends HTMLElement {
             <option value="default" ${this._config.card_style !== "minimal" ? "selected" : ""}>Default (with padding)</option>
             <option value="minimal" ${this._config.card_style === "minimal" ? "selected" : ""}>Minimal (edge-to-edge)</option>
           </select>
+        </div>
+
+        <div class="divider"></div>
+        <div class="section-label">Advanced</div>
+
+        <div class="field">
+          <label for="refresh_interval">Refresh Interval (seconds)</label>
+          <input
+            type="number"
+            id="refresh_interval"
+            value="${this._config.refresh_interval || 3600}"
+            min="300"
+            step="300"
+          />
+          <div class="hint">How often to re-fetch the RSS feed. Minimum 300s (5 min). Default 3600s (1 hour).</div>
+        </div>
+        <div class="field">
+          <label for="cors_proxy">CORS Proxy (optional)</label>
+          <input
+            type="text"
+            id="cors_proxy"
+            value="${this._escAttr(this._config.cors_proxy || "")}"
+            placeholder="https://corsproxy.io/?{url}"
+          />
+          <div class="hint">
+            Custom CORS proxy template. Use <code>{url}</code> as placeholder for the encoded feed URL.
+            Leave blank to use built-in proxies.
+          </div>
         </div>
       </div>
     `;
@@ -496,6 +700,16 @@ class ComicStripCardEditor extends HTMLElement {
       .querySelector("#card_style")
       .addEventListener("change", (e) => {
         this._updateConfig("card_style", e.target.value);
+      });
+    this.shadowRoot
+      .querySelector("#refresh_interval")
+      .addEventListener("change", (e) => {
+        this._updateConfig("refresh_interval", parseInt(e.target.value, 10) || 3600);
+      });
+    this.shadowRoot
+      .querySelector("#cors_proxy")
+      .addEventListener("input", (e) => {
+        this._updateConfig("cors_proxy", e.target.value);
       });
   }
 
@@ -529,9 +743,8 @@ window.customCards.push({
   type: "comic-strip-card",
   name: "Comic Strip Card",
   description:
-    "Display daily comic strips from any RSS feed (comiccaster.xyz and others).",
+    "Display daily comic strips from any RSS feed (comiccaster.xyz and others). No shell scripts required.",
   preview: false,
-  documentationURL: "https://github.com/YOUR_USERNAME/comic-strip-card",
 });
 
 console.info(

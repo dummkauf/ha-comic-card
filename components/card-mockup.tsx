@@ -77,7 +77,7 @@ function ComicCardMockup({
               <polyline points="21 15 16 10 5 21" />
             </svg>
             <span className="text-xs opacity-60">
-              Comic strip loads from local cache
+              Comic strip loads directly from RSS feed
             </span>
           </div>
         </div>

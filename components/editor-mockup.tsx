@@ -10,17 +10,8 @@ export default function EditorMockup() {
   const [showTitle, setShowTitle] = useState(true);
   const [showDate, setShowDate] = useState(true);
   const [cardStyle, setCardStyle] = useState("default");
-
-  const slug = rssUrl
-    ? (() => {
-        try {
-          const p = new URL(rssUrl).pathname;
-          return p.split("/").filter(Boolean).pop() || "comic";
-        } catch {
-          return "comic";
-        }
-      })()
-    : "comic";
+  const [refreshInterval, setRefreshInterval] = useState(3600);
+  const [corsProxy, setCorsProxy] = useState("");
 
   return (
     <div className="flex flex-col gap-6">
@@ -30,7 +21,7 @@ export default function EditorMockup() {
             Card Configuration
           </p>
           <p className="text-xs text-muted-foreground">
-            Visual editor preview (as seen in Home Assistant)
+            Interactive preview of the visual editor (as seen in Home Assistant)
           </p>
         </div>
         <div className="p-4 flex flex-col gap-4">
@@ -69,8 +60,7 @@ export default function EditorMockup() {
               className="px-3 py-2 rounded-lg border border-input bg-background text-foreground text-sm outline-none focus:border-primary transition-colors"
             />
             <p className="text-xs text-muted-foreground">
-              Overrides the title from the RSS feed. Leave blank to use the feed
-              title.
+              Overrides the title from the RSS feed. Leave blank to auto-detect.
             </p>
           </div>
           <div className="flex items-center justify-between">
@@ -98,7 +88,7 @@ export default function EditorMockup() {
                 Show Date
               </label>
               <span className="text-xs text-muted-foreground">
-                Display the date the comic was fetched.
+                Display the publication date from the RSS feed.
               </span>
             </div>
             <button
@@ -124,35 +114,63 @@ export default function EditorMockup() {
               <option value="minimal">Minimal (edge-to-edge)</option>
             </select>
           </div>
+
+          <div className="border-t border-border my-1" />
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Advanced
+          </p>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-foreground">
+              Refresh Interval (seconds)
+            </label>
+            <input
+              type="number"
+              value={refreshInterval}
+              onChange={(e) =>
+                setRefreshInterval(parseInt(e.target.value, 10) || 3600)
+              }
+              min={300}
+              step={300}
+              className="px-3 py-2 rounded-lg border border-input bg-background text-foreground text-sm outline-none focus:border-primary transition-colors"
+            />
+            <p className="text-xs text-muted-foreground">
+              How often to re-fetch the RSS feed. Minimum 300s (5 min). Default
+              3600s (1 hour).
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-foreground">
+              CORS Proxy (optional)
+            </label>
+            <input
+              type="text"
+              value={corsProxy}
+              onChange={(e) => setCorsProxy(e.target.value)}
+              placeholder="https://corsproxy.io/?{url}"
+              className="px-3 py-2 rounded-lg border border-input bg-background text-foreground text-sm outline-none focus:border-primary transition-colors"
+            />
+            <p className="text-xs text-muted-foreground">
+              Custom CORS proxy URL template. Use{" "}
+              <code className="text-foreground bg-secondary px-1 rounded text-xs">
+                {"{url}"}
+              </code>{" "}
+              as placeholder. Leave blank to use built-in proxies.
+            </p>
+          </div>
         </div>
       </div>
 
       <div className="rounded-xl border border-border bg-secondary/30 overflow-hidden">
         <div className="px-4 py-3 border-b border-border">
-          <p className="text-sm font-medium text-foreground">
-            Generated YAML
-          </p>
+          <p className="text-sm font-medium text-foreground">Generated YAML</p>
         </div>
         <pre className="p-4 text-xs font-mono text-foreground overflow-x-auto leading-relaxed">
           {`type: custom:comic-strip-card
 rss_url: ${rssUrl || "https://comiccaster.xyz/rss/calvinandhobbes"}${title ? `\ntitle: ${title}` : ""}
 show_title: ${showTitle}
 show_date: ${showDate}
-card_style: ${cardStyle}`}
-        </pre>
-      </div>
-
-      <div className="rounded-xl border border-border bg-secondary/30 overflow-hidden">
-        <div className="px-4 py-3 border-b border-border">
-          <p className="text-sm font-medium text-foreground">
-            Shell Command (configuration.yaml)
-          </p>
-        </div>
-        <pre className="p-4 text-xs font-mono text-foreground overflow-x-auto leading-relaxed">
-          {`shell_command:
-  fetch_comic_${slug}: >-
-    /config/www/community/comic-card/comic-strip.sh
-    ${rssUrl || "https://comiccaster.xyz/rss/calvinandhobbes"}`}
+card_style: ${cardStyle}${refreshInterval !== 3600 ? `\nrefresh_interval: ${refreshInterval}` : ""}${corsProxy ? `\ncors_proxy: "${corsProxy}"` : ""}`}
         </pre>
       </div>
     </div>
