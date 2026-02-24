@@ -7,7 +7,7 @@
  * License: MIT
  */
 
-const CARD_VERSION = "2.2.0";
+const CARD_VERSION = "2.3.0";
 
 // ---------------------------------------------------------------------------
 // CORS proxy helper
@@ -748,7 +748,7 @@ class ComicStripCardEditor extends HTMLElement {
                 min="0.25"
                 step="0.25"
               />
-          <div class="hint">How often to re-fetch the RSS feed. Minimum 300s (5 min). Default 3600s (1 hour).</div>
+          <div class="hint">How often to re-fetch the RSS feed. Minimum 0.25 hours (15 min). Default 1 hour.</div>
         </div>
         <div class="field">
           <label for="cors_proxy">CORS Proxy (optional)</label>
