@@ -7,7 +7,7 @@
  * License: MIT
  */
 
-const CARD_VERSION = "2.1.0";
+const CARD_VERSION = "2.2.0";
 
 // ---------------------------------------------------------------------------
 // CORS proxy helper
@@ -50,8 +50,13 @@ async function fetchWithCorsFallback(url, customProxy) {
 }
 
 // ---------------------------------------------------------------------------
-// RSS parser: extract the first item's image URL and metadata from XML text
-// Handles <img> in description, <enclosure>, and <media:content>
+// RSS parser: extract the best (most recent) item's image URL and metadata.
+// Handles <img> in description, <enclosure>, and <media:content>.
+//
+// Feed items are typically newest-first, but we don't assume that.
+// We parse ALL items, pick the one with the most recent pubDate, and
+// return it.  This ensures we always show today's strip when available,
+// even if the feed order is unexpected.
 // ---------------------------------------------------------------------------
 function parseRssFeed(xmlText) {
   const parser = new DOMParser();
@@ -61,12 +66,25 @@ function parseRssFeed(xmlText) {
   const channelTitle =
     doc.querySelector("channel > title")?.textContent?.trim() || "";
 
-  // Get all items, take the first one (today's comic)
   const items = doc.querySelectorAll("item");
   if (items.length === 0) return { channelTitle, imageUrl: null, pubDate: null };
 
-  const item = items[0];
+  // Parse all items and pick the one with the newest pubDate.
+  let bestItem = items[0];
+  let bestDate = -Infinity;
 
+  for (const item of items) {
+    const raw = item.querySelector("pubDate")?.textContent?.trim();
+    if (raw) {
+      const ts = new Date(raw).getTime();
+      if (!isNaN(ts) && ts > bestDate) {
+        bestDate = ts;
+        bestItem = item;
+      }
+    }
+  }
+
+  const item = bestItem;
   const pubDate = item.querySelector("pubDate")?.textContent?.trim() || null;
   const itemTitle = item.querySelector("title")?.textContent?.trim() || "";
 
@@ -238,6 +256,10 @@ class ComicStripCard extends HTMLElement {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
     }
+    if (this._staleRetryTimer) {
+      clearTimeout(this._staleRetryTimer);
+      this._staleRetryTimer = null;
+    }
   }
 
   _setupRefreshTimer() {
@@ -269,11 +291,43 @@ class ComicStripCard extends HTMLElement {
         this._lastFetchDate = new Date();
       }
       this._loading = false;
+
+      // If the newest strip is from before today (local time), the feed
+      // hasn't been updated yet.  Schedule a short retry (5 min) so we
+      // pick up today's strip as soon as the feed publishes it, rather
+      // than waiting for the full refresh_interval.
+      this._scheduleStaleRetry();
     } catch (err) {
       this._error = err.message || "fetch-failed";
       this._loading = false;
     }
     this._render();
+  }
+
+  _scheduleStaleRetry() {
+    if (this._staleRetryTimer) clearTimeout(this._staleRetryTimer);
+
+    if (!this._feedData || !this._feedData.pubDate) return;
+
+    const pubDate = new Date(this._feedData.pubDate);
+    const now = new Date();
+
+    // Compare calendar dates in the user's local timezone
+    const pubDay = new Date(pubDate.getFullYear(), pubDate.getMonth(), pubDate.getDate());
+    const today  = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    if (pubDay < today) {
+      // Strip is stale -- retry in 5 minutes (max 6 retries = 30 min)
+      this._staleRetryCount = (this._staleRetryCount || 0) + 1;
+      if (this._staleRetryCount <= 6) {
+        this._staleRetryTimer = setTimeout(() => {
+          this._fetchFeed();
+        }, 5 * 60 * 1000); // 5 minutes
+      }
+    } else {
+      // Strip is current, reset retry count
+      this._staleRetryCount = 0;
+    }
   }
 
   // --- Rendering ---
@@ -289,7 +343,8 @@ class ComicStripCard extends HTMLElement {
     let dateStr = "";
     if (this._feedData && this._feedData.pubDate) {
       try {
-        dateStr = new Date(this._feedData.pubDate).toLocaleDateString(
+        const pubDate = new Date(this._feedData.pubDate);
+        dateStr = pubDate.toLocaleDateString(
           undefined,
           { weekday: "long", year: "numeric", month: "long", day: "numeric" }
         );
