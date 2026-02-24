@@ -209,10 +209,10 @@ class ComicStripCard extends HTMLElement {
       show_date: true,
       card_style: "default",
       cors_proxy: "",
-      refresh_interval: 3600,
-    };
+  refresh_interval: 1,
+  };
   }
-
+  
   setConfig(config) {
     // Don't throw on missing rss_url -- show a friendly placeholder instead.
     // Throwing here breaks the visual editor and the card picker.
@@ -224,7 +224,7 @@ class ComicStripCard extends HTMLElement {
       show_date: config.show_date !== false,
       card_style: config.card_style || "default",
       cors_proxy: config.cors_proxy || "",
-      refresh_interval: config.refresh_interval || 3600,
+      refresh_interval: config.refresh_interval || 1,
     };
 
     // If no RSS URL is configured, show the setup placeholder
@@ -278,10 +278,10 @@ class ComicStripCard extends HTMLElement {
     if (this._refreshTimer) {
       clearInterval(this._refreshTimer);
     }
-    const intervalSec = Math.max(300, this._config.refresh_interval || 3600);
+    const intervalHours = Math.max(0.25, this._config.refresh_interval || 1);
     this._refreshTimer = setInterval(() => {
       this._fetchFeed();
-    }, intervalSec * 1000);
+    }, intervalHours * 3600 * 1000);
   }
 
   // --- Data fetching ---
@@ -324,9 +324,9 @@ class ComicStripCard extends HTMLElement {
     const pubDate = new Date(this._feedData.pubDate);
     const now = new Date();
 
-    // Compare calendar dates in the user's local timezone
-    const pubDay = new Date(pubDate.getFullYear(), pubDate.getMonth(), pubDate.getDate());
-    const today  = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    // Compare calendar dates in UTC (feeds use UTC midnight for pubDate)
+    const pubDay = new Date(Date.UTC(pubDate.getUTCFullYear(), pubDate.getUTCMonth(), pubDate.getUTCDate()));
+    const today  = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
     if (pubDay < today) {
       // Strip is stale -- retry in 5 minutes (max 6 retries = 30 min)
@@ -356,10 +356,15 @@ class ComicStripCard extends HTMLElement {
     if (this._feedData && this._feedData.pubDate) {
       try {
         const pubDate = new Date(this._feedData.pubDate);
-        dateStr = pubDate.toLocaleDateString(
-          undefined,
-          { weekday: "long", year: "numeric", month: "long", day: "numeric" }
-        );
+        // Format in UTC so "Tue, 24 Feb 2026 00:00:00 +0000" stays Feb 24
+        // and doesn't shift to Feb 23 in western timezones.
+        dateStr = pubDate.toLocaleDateString(undefined, {
+          weekday: "short",
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          timeZone: "UTC",
+        });
       } catch {
         dateStr = this._feedData.pubDate;
       }
@@ -378,23 +383,26 @@ class ComicStripCard extends HTMLElement {
         }
         .card-header {
           display: flex;
-          align-items: center;
+          align-items: baseline;
           justify-content: space-between;
-          padding: 16px 16px 8px 16px;
+          padding: 12px 16px 6px 16px;
+          gap: 8px;
         }
         .card-title {
-          font-size: 1.1em;
+          font-size: 0.85em;
           font-weight: 600;
           color: var(--primary-text-color, #333);
           text-transform: capitalize;
           margin: 0;
           line-height: 1.3;
+          white-space: nowrap;
         }
         .card-date {
           font-size: 0.78em;
           color: var(--secondary-text-color, #888);
           margin: 0;
           line-height: 1.3;
+          white-space: nowrap;
         }
         .card-content {
           padding: ${isMinimal ? "0" : "0 16px 16px 16px"};
@@ -458,10 +466,8 @@ class ComicStripCard extends HTMLElement {
           this._config.show_title && !isMinimal
             ? `
           <div class="card-header">
-            <div>
               <p class="card-title">${this._escHtml(title)}</p>
               ${this._config.show_date && dateStr ? `<p class="card-date">${this._escHtml(dateStr)}</p>` : ""}
-            </div>
           </div>`
             : ""
         }
@@ -734,14 +740,14 @@ class ComicStripCardEditor extends HTMLElement {
         <div class="section-label">Advanced</div>
 
         <div class="field">
-          <label for="refresh_interval">Refresh Interval (seconds)</label>
-          <input
-            type="number"
-            id="refresh_interval"
-            value="${this._config.refresh_interval || 3600}"
-            min="300"
-            step="300"
-          />
+              <label for="refresh_interval">Refresh Interval (hours)</label>
+              <input
+                type="number"
+                id="refresh_interval"
+                value="${this._config.refresh_interval || 1}"
+                min="0.25"
+                step="0.25"
+              />
           <div class="hint">How often to re-fetch the RSS feed. Minimum 300s (5 min). Default 3600s (1 hour).</div>
         </div>
         <div class="field">
@@ -785,7 +791,7 @@ class ComicStripCardEditor extends HTMLElement {
     this.shadowRoot
       .querySelector("#refresh_interval")
       .addEventListener("change", (e) => {
-        this._updateConfig("refresh_interval", parseInt(e.target.value, 10) || 3600);
+        this._updateConfig("refresh_interval", parseFloat(e.target.value) || 1);
       });
     this.shadowRoot
       .querySelector("#cors_proxy")

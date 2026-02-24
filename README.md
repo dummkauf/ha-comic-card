@@ -72,7 +72,7 @@ card_style: default
 | `show_title`       | boolean | `true`      | Show the comic title and date above the image                            |
 | `show_date`        | boolean | `true`      | Show the publication date from the RSS feed                              |
 | `card_style`       | string  | `default`   | Card style: `default` (padded with title) or `minimal` (edge-to-edge)   |
-| `refresh_interval` | number  | `3600`      | How often to re-fetch the feed, in seconds (minimum 300)                 |
+| `refresh_interval` | number  | `1`         | How often to re-fetch the feed, in hours (minimum 0.25)                  |
 | `cors_proxy`       | string  | *auto*      | Custom CORS proxy URL template (use `{url}` as placeholder)             |
 
 ---

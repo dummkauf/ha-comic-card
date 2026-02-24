@@ -7,30 +7,33 @@ const SAMPLE_COMICS = [
     slug: "calvinandhobbes",
     title: "Calvin and Hobbes",
     date: new Date().toLocaleDateString(undefined, {
-      weekday: "long",
+      weekday: "short",
       year: "numeric",
-      month: "long",
+      month: "short",
       day: "numeric",
+      timeZone: "UTC",
     }),
   },
   {
     slug: "garfield",
     title: "Garfield",
     date: new Date().toLocaleDateString(undefined, {
-      weekday: "long",
+      weekday: "short",
       year: "numeric",
-      month: "long",
+      month: "short",
       day: "numeric",
+      timeZone: "UTC",
     }),
   },
   {
     slug: "peanuts",
     title: "Peanuts",
     date: new Date().toLocaleDateString(undefined, {
-      weekday: "long",
+      weekday: "short",
       year: "numeric",
-      month: "long",
+      month: "short",
       day: "numeric",
+      timeZone: "UTC",
     }),
   },
 ];
@@ -47,13 +50,13 @@ function ComicCardMockup({
   return (
     <div className="rounded-xl bg-card overflow-hidden shadow-sm border border-border">
       {!minimal && (
-        <div className="flex items-center justify-between px-4 pt-4 pb-2">
-          <div>
-            <p className="text-sm font-semibold text-foreground capitalize">
-              {title}
-            </p>
-            <p className="text-xs text-muted-foreground">{date}</p>
-          </div>
+        <div className="flex items-baseline justify-between px-4 pt-3 pb-1.5 gap-2">
+          <p className="text-xs font-semibold text-foreground capitalize whitespace-nowrap">
+            {title}
+          </p>
+          <p className="text-xs text-muted-foreground whitespace-nowrap">
+            {date}
+          </p>
         </div>
       )}
       <div className={minimal ? "p-0" : "px-4 pb-4"}>

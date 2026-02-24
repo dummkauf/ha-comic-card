@@ -10,7 +10,7 @@ export default function EditorMockup() {
   const [showTitle, setShowTitle] = useState(true);
   const [showDate, setShowDate] = useState(true);
   const [cardStyle, setCardStyle] = useState("default");
-  const [refreshInterval, setRefreshInterval] = useState(3600);
+  const [refreshInterval, setRefreshInterval] = useState(1);
   const [corsProxy, setCorsProxy] = useState("");
 
   return (
@@ -122,21 +122,21 @@ export default function EditorMockup() {
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-foreground">
-              Refresh Interval (seconds)
+              Refresh Interval (hours)
             </label>
             <input
               type="number"
               value={refreshInterval}
               onChange={(e) =>
-                setRefreshInterval(parseInt(e.target.value, 10) || 3600)
+                setRefreshInterval(parseFloat(e.target.value) || 1)
               }
-              min={300}
-              step={300}
+              min={0.25}
+              step={0.25}
               className="px-3 py-2 rounded-lg border border-input bg-background text-foreground text-sm outline-none focus:border-primary transition-colors"
             />
             <p className="text-xs text-muted-foreground">
-              How often to re-fetch the RSS feed. Minimum 300s (5 min). Default
-              3600s (1 hour).
+              How often to re-fetch the RSS feed. Minimum 0.25 hours (15 min).
+              Default 1 hour.
             </p>
           </div>
           <div className="flex flex-col gap-1.5">
@@ -170,7 +170,7 @@ export default function EditorMockup() {
 rss_url: ${rssUrl || "https://comiccaster.xyz/rss/calvinandhobbes"}${title ? `\ntitle: ${title}` : ""}
 show_title: ${showTitle}
 show_date: ${showDate}
-card_style: ${cardStyle}${refreshInterval !== 3600 ? `\nrefresh_interval: ${refreshInterval}` : ""}${corsProxy ? `\ncors_proxy: "${corsProxy}"` : ""}`}
+card_style: ${cardStyle}${refreshInterval !== 1 ? `\nrefresh_interval: ${refreshInterval}` : ""}${corsProxy ? `\ncors_proxy: "${corsProxy}"` : ""}`}
         </pre>
       </div>
     </div>
