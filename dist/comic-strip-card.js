@@ -7,7 +7,7 @@
  * License: MIT
  */
 
-const CARD_VERSION = "2.3.0";
+const CARD_VERSION = "2.4.0";
 
 // ---------------------------------------------------------------------------
 // CORS proxy helper
@@ -15,17 +15,12 @@ const CARD_VERSION = "2.3.0";
 // We try a direct fetch first, then fall back to a public CORS proxy.
 // Users can also set a custom proxy in card config.
 // ---------------------------------------------------------------------------
-// Append a cache-busting parameter to a URL.  This defeats both browser
-// caching AND server-side caching on public CORS proxies (allorigins,
-// corsproxy.io, etc.) which key their cache on the full request URL.
 function cacheBust(url) {
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}_t=${Date.now()}`;
 }
 
 const DEFAULT_CORS_PROXIES = [
-  // Each proxy receives the cache-busted source URL so the proxy itself
-  // also sees a fresh, uncached request.
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
   (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
 ];
@@ -33,14 +28,12 @@ const DEFAULT_CORS_PROXIES = [
 async function fetchWithCorsFallback(url, customProxy) {
   const freshUrl = cacheBust(url);
 
-  // If the user provided a custom proxy URL template, try that first
   if (customProxy) {
     const proxied = customProxy.replace("{url}", encodeURIComponent(freshUrl));
     const resp = await fetch(cacheBust(proxied), { cache: "no-store" });
     if (resp.ok) return resp;
   }
 
-  // Try direct fetch first (works if the feed server allows CORS)
   try {
     const resp = await fetch(freshUrl, { cache: "no-store" });
     if (resp.ok) return resp;
@@ -48,7 +41,6 @@ async function fetchWithCorsFallback(url, customProxy) {
     // CORS or network error -- fall through to proxies
   }
 
-  // Try each public proxy in order
   for (const proxyFn of DEFAULT_CORS_PROXIES) {
     try {
       const resp = await fetch(cacheBust(proxyFn(freshUrl)), { cache: "no-store" });
@@ -62,26 +54,85 @@ async function fetchWithCorsFallback(url, customProxy) {
 }
 
 // ---------------------------------------------------------------------------
-// RSS parser: extract the best (most recent) item's image URL and metadata.
-// Handles <img> in description, <enclosure>, and <media:content>.
-//
-// Feed items are typically newest-first, but we don't assume that.
-// We parse ALL items, pick the one with the most recent pubDate, and
-// return it.  This ensures we always show today's strip when available,
-// even if the feed order is unexpected.
+// Image cache using IndexedDB (works in HA's webview; no size limits like
+// the Cache API).  Stores one entry per RSS slug: { blob, metadata, timestamp }
+// ---------------------------------------------------------------------------
+const IMG_DB_NAME = "comic-strip-card-cache";
+const IMG_DB_VERSION = 1;
+const IMG_STORE = "images";
+
+function openImageDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IMG_DB_NAME, IMG_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IMG_STORE)) {
+        db.createObjectStore(IMG_STORE, { keyPath: "slug" });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function getCachedImage(slug) {
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IMG_STORE, "readonly");
+      const store = tx.objectStore(IMG_STORE);
+      const req = store.get(slug);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function setCachedImage(slug, blob, metadata) {
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IMG_STORE, "readwrite");
+      const store = tx.objectStore(IMG_STORE);
+      store.put({ slug, blob, metadata, timestamp: Date.now() });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Slug helper
+// ---------------------------------------------------------------------------
+function slugFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    let raw = parts[parts.length - 1] || u.hostname;
+    raw = raw.replace(/\.[^.]+$/, "");
+    return raw.replace(/[^a-z0-9]+/gi, "_").toLowerCase() || "comic";
+  } catch {
+    return "comic";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RSS parser
 // ---------------------------------------------------------------------------
 function parseRssFeed(xmlText) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlText, "text/xml");
 
-  // Channel-level title (fallback for card title)
   const channelTitle =
     doc.querySelector("channel > title")?.textContent?.trim() || "";
 
   const items = doc.querySelectorAll("item");
   if (items.length === 0) return { channelTitle, imageUrl: null, pubDate: null };
 
-  // Parse all items and pick the one with the newest pubDate.
   let bestItem = items[0];
   let bestDate = -Infinity;
 
@@ -102,7 +153,7 @@ function parseRssFeed(xmlText) {
 
   let imageUrl = null;
 
-  // Strategy 1: Look for <enclosure> with an image type
+  // Strategy 1: <enclosure>
   const enclosure = item.querySelector("enclosure");
   if (enclosure) {
     const encType = enclosure.getAttribute("type") || "";
@@ -112,13 +163,9 @@ function parseRssFeed(xmlText) {
     }
   }
 
-  // Strategy 2: Look for <media:content> (namespace-aware and fallback)
+  // Strategy 2: <media:content>
   if (!imageUrl) {
-    // Try namespace-aware first
-    const mediaContent = item.getElementsByTagNameNS(
-      "http://search.yahoo.com/mrss/",
-      "content"
-    );
+    const mediaContent = item.getElementsByTagNameNS("http://search.yahoo.com/mrss/", "content");
     if (mediaContent.length > 0) {
       const mcUrl = mediaContent[0].getAttribute("url") || "";
       const mcType = mediaContent[0].getAttribute("type") || mediaContent[0].getAttribute("medium") || "";
@@ -126,7 +173,6 @@ function parseRssFeed(xmlText) {
         imageUrl = mcUrl;
       }
     }
-    // Fallback: try without namespace (some feeds use <media:content> without declaring the NS)
     if (!imageUrl) {
       const mcFallback = item.querySelectorAll("[url]");
       for (const el of mcFallback) {
@@ -141,29 +187,22 @@ function parseRssFeed(xmlText) {
     }
   }
 
-  // Strategy 3: Parse <description> HTML for <img> tags
+  // Strategy 3: <img> in <description>
   if (!imageUrl) {
     let descHtml =
       item.querySelector("description")?.textContent ||
       item.querySelector("description")?.innerHTML ||
       "";
-
-    // Handle CDATA: the text content should already be unwrapped, but just in case
     descHtml = descHtml.replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
-
-    // Find img src
     const imgMatch = descHtml.match(/<img[^>]+src=["']([^"']+)["']/i);
     if (imgMatch && imgMatch[1]) {
       imageUrl = imgMatch[1];
     }
   }
 
-  // Strategy 4: Look for image URL anywhere in the item content
+  // Strategy 4: <content:encoded>
   if (!imageUrl) {
-    const contentEncoded = item.getElementsByTagNameNS(
-      "http://purl.org/rss/1.0/modules/content/",
-      "encoded"
-    );
+    const contentEncoded = item.getElementsByTagNameNS("http://purl.org/rss/1.0/modules/content/", "encoded");
     if (contentEncoded.length > 0) {
       const html = contentEncoded[0].textContent || "";
       const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -173,12 +212,7 @@ function parseRssFeed(xmlText) {
     }
   }
 
-  return {
-    channelTitle,
-    itemTitle,
-    imageUrl,
-    pubDate,
-  };
+  return { channelTitle, itemTitle, imageUrl, pubDate };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +227,8 @@ class ComicStripCard extends HTMLElement {
     this._feedData = null;
     this._error = null;
     this._loading = true;
-    this._lastFetchDate = null; // track the date of the last successful fetch
+    this._cachedBlobUrl = null; // object URL for cached image blob
+    this._lastFetchDate = null;
   }
 
   // --- HA lifecycle ---
@@ -209,13 +244,11 @@ class ComicStripCard extends HTMLElement {
       show_date: true,
       card_style: "default",
       cors_proxy: "",
-  refresh_interval: 1,
-  };
+      refresh_interval: 1,
+    };
   }
-  
+
   setConfig(config) {
-    // Don't throw on missing rss_url -- show a friendly placeholder instead.
-    // Throwing here breaks the visual editor and the card picker.
     const oldUrl = this._config.rss_url;
     this._config = {
       rss_url: config.rss_url || "",
@@ -227,7 +260,6 @@ class ComicStripCard extends HTMLElement {
       refresh_interval: config.refresh_interval || 1,
     };
 
-    // If no RSS URL is configured, show the setup placeholder
     if (!this._config.rss_url) {
       this._loading = false;
       this._error = null;
@@ -236,18 +268,16 @@ class ComicStripCard extends HTMLElement {
       return;
     }
 
-    // Only re-fetch if the RSS URL changed or we haven't fetched yet
     if (oldUrl !== this._config.rss_url || !this._feedData) {
       this._loading = true;
       this._error = null;
       this._feedData = null;
       this._render();
-      this._fetchFeed();
+      this._loadComic();
     } else {
       this._render();
     }
 
-    // Set up auto-refresh
     this._setupRefreshTimer();
   }
 
@@ -272,6 +302,11 @@ class ComicStripCard extends HTMLElement {
       clearTimeout(this._staleRetryTimer);
       this._staleRetryTimer = null;
     }
+    // Revoke any blob URL to avoid memory leaks
+    if (this._cachedBlobUrl) {
+      URL.revokeObjectURL(this._cachedBlobUrl);
+      this._cachedBlobUrl = null;
+    }
   }
 
   _setupRefreshTimer() {
@@ -280,12 +315,40 @@ class ComicStripCard extends HTMLElement {
     }
     const intervalHours = Math.max(0.25, this._config.refresh_interval || 1);
     this._refreshTimer = setInterval(() => {
-      this._fetchFeed();
+      this._fetchAndCacheFeed();
     }, intervalHours * 3600 * 1000);
   }
 
-  // --- Data fetching ---
-  async _fetchFeed() {
+  // --- Load comic: check cache first, then fetch if stale ---
+  async _loadComic() {
+    const slug = slugFromUrl(this._config.rss_url);
+    const cached = await getCachedImage(slug);
+
+    if (cached && cached.blob && cached.metadata) {
+      const ageHours = (Date.now() - cached.timestamp) / (3600 * 1000);
+      const maxAge = Math.max(0.25, this._config.refresh_interval || 1);
+
+      // Show cached image immediately
+      if (this._cachedBlobUrl) URL.revokeObjectURL(this._cachedBlobUrl);
+      this._cachedBlobUrl = URL.createObjectURL(cached.blob);
+      this._feedData = cached.metadata;
+      this._error = null;
+      this._loading = false;
+      this._render();
+
+      // If cache is stale, refresh in the background
+      if (ageHours >= maxAge) {
+        this._fetchAndCacheFeed();
+      }
+      return;
+    }
+
+    // No cache -- fetch from network
+    await this._fetchAndCacheFeed();
+  }
+
+  // --- Fetch RSS, download image, store in cache, then render ---
+  async _fetchAndCacheFeed() {
     try {
       const resp = await fetchWithCorsFallback(
         this._config.rss_url,
@@ -297,20 +360,53 @@ class ComicStripCard extends HTMLElement {
       if (!data.imageUrl) {
         this._error = "no-image";
         this._feedData = data;
-      } else {
-        this._error = null;
-        this._feedData = data;
-        this._lastFetchDate = new Date();
+        this._loading = false;
+        this._render();
+        return;
       }
-      this._loading = false;
 
-      // If the newest strip is from before today (local time), the feed
-      // hasn't been updated yet.  Schedule a short retry (5 min) so we
-      // pick up today's strip as soon as the feed publishes it, rather
-      // than waiting for the full refresh_interval.
+      // Download the actual comic image as a blob
+      let imageBlob = null;
+      try {
+        const imgResp = await fetchWithCorsFallback(
+          data.imageUrl,
+          this._config.cors_proxy || null
+        );
+        imageBlob = await imgResp.blob();
+      } catch {
+        // Image download failed -- still show from URL directly
+      }
+
+      if (imageBlob && imageBlob.size > 0) {
+        // Store in IndexedDB cache
+        const slug = slugFromUrl(this._config.rss_url);
+        const metadata = {
+          channelTitle: data.channelTitle,
+          itemTitle: data.itemTitle,
+          imageUrl: data.imageUrl,
+          pubDate: data.pubDate,
+        };
+        await setCachedImage(slug, imageBlob, metadata);
+
+        // Create blob URL for display
+        if (this._cachedBlobUrl) URL.revokeObjectURL(this._cachedBlobUrl);
+        this._cachedBlobUrl = URL.createObjectURL(imageBlob);
+        this._feedData = metadata;
+      } else {
+        // Couldn't download image blob -- fall back to direct URL
+        this._cachedBlobUrl = null;
+        this._feedData = data;
+      }
+
+      this._error = null;
+      this._lastFetchDate = new Date();
+      this._loading = false;
       this._scheduleStaleRetry();
     } catch (err) {
-      this._error = err.message || "fetch-failed";
+      // Network error -- if we have a cached version, keep showing it
+      if (!this._feedData) {
+        this._error = err.message || "fetch-failed";
+      }
       this._loading = false;
     }
     this._render();
@@ -318,26 +414,21 @@ class ComicStripCard extends HTMLElement {
 
   _scheduleStaleRetry() {
     if (this._staleRetryTimer) clearTimeout(this._staleRetryTimer);
-
     if (!this._feedData || !this._feedData.pubDate) return;
 
     const pubDate = new Date(this._feedData.pubDate);
     const now = new Date();
-
-    // Compare calendar dates in UTC (feeds use UTC midnight for pubDate)
     const pubDay = new Date(Date.UTC(pubDate.getUTCFullYear(), pubDate.getUTCMonth(), pubDate.getUTCDate()));
-    const today  = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
     if (pubDay < today) {
-      // Strip is stale -- retry in 5 minutes (max 6 retries = 30 min)
       this._staleRetryCount = (this._staleRetryCount || 0) + 1;
       if (this._staleRetryCount <= 6) {
         this._staleRetryTimer = setTimeout(() => {
-          this._fetchFeed();
-        }, 5 * 60 * 1000); // 5 minutes
+          this._fetchAndCacheFeed();
+        }, 5 * 60 * 1000);
       }
     } else {
-      // Strip is current, reset retry count
       this._staleRetryCount = 0;
     }
   }
@@ -356,8 +447,6 @@ class ComicStripCard extends HTMLElement {
     if (this._feedData && this._feedData.pubDate) {
       try {
         const pubDate = new Date(this._feedData.pubDate);
-        // Format in UTC so "Tue, 24 Feb 2026 00:00:00 +0000" stays Feb 24
-        // and doesn't shift to Feb 23 in western timezones.
         dateStr = pubDate.toLocaleDateString(undefined, {
           weekday: "short",
           year: "numeric",
@@ -477,7 +566,6 @@ class ComicStripCard extends HTMLElement {
       </ha-card>
     `;
 
-    // Attach image error handler -- if the remote image fails, show placeholder
     const img = this.shadowRoot.querySelector(".comic-image");
     if (img) {
       img.addEventListener("error", () => {
@@ -522,8 +610,9 @@ class ComicStripCard extends HTMLElement {
       );
     }
 
-    const imgUrl = this._feedData.imageUrl;
-    return `<img class="comic-image" src="${this._escHtml(imgUrl)}" alt="Daily comic strip" crossorigin="anonymous" referrerpolicy="no-referrer" />`;
+    // Prefer cached blob URL; fall back to remote URL
+    const imgSrc = this._cachedBlobUrl || (this._feedData && this._feedData.imageUrl) || "";
+    return `<img class="comic-image" src="${this._escHtml(imgSrc)}" alt="Daily comic strip" crossorigin="anonymous" referrerpolicy="no-referrer" />`;
   }
 
   _renderPlaceholder(msg, hint) {
@@ -740,14 +829,14 @@ class ComicStripCardEditor extends HTMLElement {
         <div class="section-label">Advanced</div>
 
         <div class="field">
-              <label for="refresh_interval">Refresh Interval (hours)</label>
-              <input
-                type="number"
-                id="refresh_interval"
-                value="${this._config.refresh_interval || 1}"
-                min="0.25"
-                step="0.25"
-              />
+          <label for="refresh_interval">Refresh Interval (hours)</label>
+          <input
+            type="number"
+            id="refresh_interval"
+            value="${this._config.refresh_interval || 1}"
+            min="0.25"
+            step="0.25"
+          />
           <div class="hint">How often to re-fetch the RSS feed. Minimum 0.25 hours (15 min). Default 1 hour.</div>
         </div>
         <div class="field">
@@ -802,8 +891,6 @@ class ComicStripCardEditor extends HTMLElement {
 
   _updateConfig(key, value) {
     this._config = { ...this._config, [key]: value };
-    // Use the exact event dispatch pattern from the HA developer docs:
-    // new Event() with detail assigned separately, bubbles + composed.
     const event = new Event("config-changed", {
       bubbles: true,
       composed: true,
@@ -823,10 +910,6 @@ class ComicStripCardEditor extends HTMLElement {
 
 // ---------------------------------------------------------------------------
 // Register elements
-// IMPORTANT: The editor MUST be registered before the card.
-// When HA calls ComicStripCard.getConfigElement(), it does
-// document.createElement("comic-strip-card-editor") which requires
-// the editor custom element to already be defined.
 // ---------------------------------------------------------------------------
 customElements.define("comic-strip-card-editor", ComicStripCardEditor);
 customElements.define("comic-strip-card", ComicStripCard);
@@ -836,7 +919,7 @@ window.customCards.push({
   type: "comic-strip-card",
   name: "Comic Strip Card",
   description:
-    "Display daily comic strips from any RSS feed (comiccaster.xyz and others). No shell scripts required.",
+    "Display daily comic strips from any RSS feed (comiccaster.xyz and others). Images cached locally in the browser for fast dashboard loads.",
   preview: false,
 });
 
