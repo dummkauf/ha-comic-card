@@ -15,22 +15,34 @@ const CARD_VERSION = "2.2.0";
 // We try a direct fetch first, then fall back to a public CORS proxy.
 // Users can also set a custom proxy in card config.
 // ---------------------------------------------------------------------------
+// Append a cache-busting parameter to a URL.  This defeats both browser
+// caching AND server-side caching on public CORS proxies (allorigins,
+// corsproxy.io, etc.) which key their cache on the full request URL.
+function cacheBust(url) {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}_t=${Date.now()}`;
+}
+
 const DEFAULT_CORS_PROXIES = [
+  // Each proxy receives the cache-busted source URL so the proxy itself
+  // also sees a fresh, uncached request.
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
   (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
 ];
 
 async function fetchWithCorsFallback(url, customProxy) {
+  const freshUrl = cacheBust(url);
+
   // If the user provided a custom proxy URL template, try that first
   if (customProxy) {
-    const proxied = customProxy.replace("{url}", encodeURIComponent(url));
-    const resp = await fetch(proxied, { cache: "no-store" });
+    const proxied = customProxy.replace("{url}", encodeURIComponent(freshUrl));
+    const resp = await fetch(cacheBust(proxied), { cache: "no-store" });
     if (resp.ok) return resp;
   }
 
   // Try direct fetch first (works if the feed server allows CORS)
   try {
-    const resp = await fetch(url, { cache: "no-store" });
+    const resp = await fetch(freshUrl, { cache: "no-store" });
     if (resp.ok) return resp;
   } catch {
     // CORS or network error -- fall through to proxies
@@ -39,7 +51,7 @@ async function fetchWithCorsFallback(url, customProxy) {
   // Try each public proxy in order
   for (const proxyFn of DEFAULT_CORS_PROXIES) {
     try {
-      const resp = await fetch(proxyFn(url), { cache: "no-store" });
+      const resp = await fetch(cacheBust(proxyFn(freshUrl)), { cache: "no-store" });
       if (resp.ok) return resp;
     } catch {
       continue;
